@@ -5,8 +5,14 @@
 //! streams to target types.
 
 use std::{
+    cell::{Cell, RefCell},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fmt::{self, Display, Formatter},
+    hash::{BuildHasher, Hash},
     io,
+    ops::Range,
+    rc::Rc,
+    sync::{Arc, Mutex},
 };
 
 use crate::{Error, Number};
@@ -343,6 +349,389 @@ where
             }
             token => Err(Error::invalid_value(format!(
                 "expected array, found {}",
+                token
+            ))),
+        }
+    }
+}
+
+/// Helper function to deserialize a key from a string token for maps
+fn deserialize_key_from_token<K>(key_str: &str) -> Result<K, Error>
+where
+    K: StreamDeserialize,
+{
+    use crate::JsonTokenizer;
+    use std::io::Cursor;
+
+    // Try to deserialize as string first
+    let string_json = format!("\"{}\"", key_str.replace("\"", "\\\""));
+    let mut tokenizer = JsonTokenizer::new(Cursor::new(string_json));
+    if let Ok(key) = K::deserialize_from_tokens(&mut tokenizer) {
+        return Ok(key);
+    }
+
+    // Try to parse as number
+    if let Ok(unsigned) = key_str.parse::<u64>() {
+        let mut tokenizer = JsonTokenizer::new(Cursor::new(unsigned.to_string()));
+        if let Ok(key) = K::deserialize_from_tokens(&mut tokenizer) {
+            return Ok(key);
+        }
+    }
+
+    if let Ok(signed) = key_str.parse::<i64>() {
+        let mut tokenizer = JsonTokenizer::new(Cursor::new(signed.to_string()));
+        if let Ok(key) = K::deserialize_from_tokens(&mut tokenizer) {
+            return Ok(key);
+        }
+    }
+
+    if let Ok(float) = key_str.parse::<f64>() {
+        let mut tokenizer = JsonTokenizer::new(Cursor::new(float.to_string()));
+        if let Ok(key) = K::deserialize_from_tokens(&mut tokenizer) {
+            return Ok(key);
+        }
+    }
+
+    Err(Error::invalid_value_static("key"))
+}
+
+impl<K, V, S> StreamDeserialize for HashMap<K, V, S>
+where
+    K: StreamDeserialize + Eq + Hash,
+    V: StreamDeserialize,
+    S: BuildHasher + Default,
+{
+    fn deserialize_from_tokens<Tok: Tokenizer>(tokenizer: &mut Tok) -> Result<Self, Error>
+    where
+        Tok::Error: Into<Error>,
+    {
+        match tokenizer.next_token().map_err(|e| e.into())? {
+            Token::ObjectStart => {
+                let mut map = HashMap::with_hasher(Default::default());
+
+                loop {
+                    match tokenizer.next_token().map_err(|e| e.into())? {
+                        Token::ObjectEnd => break,
+                        Token::String(key_str) => {
+                            let key = deserialize_key_from_token(&key_str)?;
+                            let value = V::deserialize_from_tokens(tokenizer)?;
+                            map.insert(key, value);
+                        }
+                        token => {
+                            return Err(Error::invalid_value(format!(
+                                "expected object key, found {}",
+                                token
+                            )));
+                        }
+                    }
+                }
+
+                Ok(map)
+            }
+            token => Err(Error::invalid_value(format!(
+                "expected object, found {}",
+                token
+            ))),
+        }
+    }
+}
+
+impl<K, V> StreamDeserialize for BTreeMap<K, V>
+where
+    K: StreamDeserialize + Ord,
+    V: StreamDeserialize,
+{
+    fn deserialize_from_tokens<Tok: Tokenizer>(tokenizer: &mut Tok) -> Result<Self, Error>
+    where
+        Tok::Error: Into<Error>,
+    {
+        match tokenizer.next_token().map_err(|e| e.into())? {
+            Token::ObjectStart => {
+                let mut map = BTreeMap::new();
+
+                loop {
+                    match tokenizer.next_token().map_err(|e| e.into())? {
+                        Token::ObjectEnd => break,
+                        Token::String(key_str) => {
+                            let key = deserialize_key_from_token(&key_str)?;
+                            let value = V::deserialize_from_tokens(tokenizer)?;
+                            map.insert(key, value);
+                        }
+                        token => {
+                            return Err(Error::invalid_value(format!(
+                                "expected object key, found {}",
+                                token
+                            )));
+                        }
+                    }
+                }
+
+                Ok(map)
+            }
+            token => Err(Error::invalid_value(format!(
+                "expected object, found {}",
+                token
+            ))),
+        }
+    }
+}
+
+impl<T, S> StreamDeserialize for HashSet<T, S>
+where
+    T: StreamDeserialize + Eq + Hash,
+    S: BuildHasher + Default,
+{
+    fn deserialize_from_tokens<Tok: Tokenizer>(tokenizer: &mut Tok) -> Result<Self, Error>
+    where
+        Tok::Error: Into<Error>,
+    {
+        match tokenizer.next_token().map_err(|e| e.into())? {
+            Token::ArrayStart => {
+                let mut set = HashSet::with_hasher(Default::default());
+
+                loop {
+                    match tokenizer.peek_token().map_err(|e| e.into())? {
+                        Token::ArrayEnd => {
+                            tokenizer.next_token().map_err(|e| e.into())?;
+                            break;
+                        }
+                        _ => {
+                            let item = T::deserialize_from_tokens(tokenizer)?;
+                            set.insert(item);
+                        }
+                    }
+                }
+
+                Ok(set)
+            }
+            token => Err(Error::invalid_value(format!(
+                "expected array, found {}",
+                token
+            ))),
+        }
+    }
+}
+
+impl<T> StreamDeserialize for Range<T>
+where
+    T: StreamDeserialize,
+{
+    fn deserialize_from_tokens<Tok: Tokenizer>(tokenizer: &mut Tok) -> Result<Self, Error>
+    where
+        Tok::Error: Into<Error>,
+    {
+        match tokenizer.next_token().map_err(|e| e.into())? {
+            Token::ObjectStart => {
+                let mut start = None;
+                let mut end = None;
+
+                loop {
+                    match tokenizer.next_token().map_err(|e| e.into())? {
+                        Token::ObjectEnd => break,
+                        Token::String(key) => {
+                            match key.as_str() {
+                                "start" => {
+                                    start = Some(T::deserialize_from_tokens(tokenizer)?);
+                                }
+                                "end" => {
+                                    end = Some(T::deserialize_from_tokens(tokenizer)?);
+                                }
+                                _ => {
+                                    // Skip unknown field
+                                    skip_value(tokenizer)?;
+                                }
+                            }
+                        }
+                        token => {
+                            return Err(Error::invalid_value(format!(
+                                "expected object key, found {}",
+                                token
+                            )));
+                        }
+                    }
+                }
+
+                let start = start.ok_or(Error::MissingField)?;
+                let end = end.ok_or(Error::MissingField)?;
+
+                Ok(start..end)
+            }
+            token => Err(Error::invalid_value(format!(
+                "expected object, found {}",
+                token
+            ))),
+        }
+    }
+}
+
+impl StreamDeserialize for () {
+    fn deserialize_from_tokens<Tok: Tokenizer>(tokenizer: &mut Tok) -> Result<Self, Error>
+    where
+        Tok::Error: Into<Error>,
+    {
+        match tokenizer.next_token().map_err(|e| e.into())? {
+            Token::Null => Ok(()),
+            token => Err(Error::invalid_value(format!(
+                "expected null, found {}",
+                token
+            ))),
+        }
+    }
+}
+
+impl<T> StreamDeserialize for BTreeSet<T>
+where
+    T: StreamDeserialize + Ord,
+{
+    fn deserialize_from_tokens<Tok: Tokenizer>(tokenizer: &mut Tok) -> Result<Self, Error>
+    where
+        Tok::Error: Into<Error>,
+    {
+        match tokenizer.next_token().map_err(|e| e.into())? {
+            Token::ArrayStart => {
+                let mut set = BTreeSet::new();
+
+                loop {
+                    match tokenizer.peek_token().map_err(|e| e.into())? {
+                        Token::ArrayEnd => {
+                            tokenizer.next_token().map_err(|e| e.into())?;
+                            break;
+                        }
+                        _ => {
+                            let item = T::deserialize_from_tokens(tokenizer)?;
+                            set.insert(item);
+                        }
+                    }
+                }
+
+                Ok(set)
+            }
+            token => Err(Error::invalid_value(format!(
+                "expected array, found {}",
+                token
+            ))),
+        }
+    }
+}
+
+// Wrapper types
+macro_rules! impl_stream_deserialize_wrapper {
+    ($wrapper:ident) => {
+        impl<T> StreamDeserialize for $wrapper<T>
+        where
+            T: StreamDeserialize,
+        {
+            fn deserialize_from_tokens<Tok: Tokenizer>(tokenizer: &mut Tok) -> Result<Self, Error>
+            where
+                Tok::Error: Into<Error>,
+            {
+                let inner = T::deserialize_from_tokens(tokenizer)?;
+                Ok($wrapper::new(inner))
+            }
+        }
+    };
+}
+
+impl_stream_deserialize_wrapper!(Box);
+impl_stream_deserialize_wrapper!(Rc);
+impl_stream_deserialize_wrapper!(Arc);
+impl_stream_deserialize_wrapper!(Cell);
+impl_stream_deserialize_wrapper!(RefCell);
+impl_stream_deserialize_wrapper!(Mutex);
+
+// Tuple implementations
+macro_rules! impl_stream_deserialize_tuple {
+    ($len:expr => ($($n:tt $ty:ident)+)) => {
+        impl<$($ty),+> StreamDeserialize for ($($ty,)+)
+        where
+            $($ty: StreamDeserialize,)+
+        {
+            fn deserialize_from_tokens<Tok: Tokenizer>(tokenizer: &mut Tok) -> Result<Self, Error>
+            where
+                Tok::Error: Into<Error>,
+            {
+                match tokenizer.next_token().map_err(|e| e.into())? {
+                    Token::ArrayStart => {
+                        let result = (
+                            $(
+                                $ty::deserialize_from_tokens(tokenizer)?,
+                            )+
+                        );
+
+                        // Expect ArrayEnd token
+                        match tokenizer.next_token().map_err(|e| e.into())? {
+                            Token::ArrayEnd => Ok(result),
+                            token => Err(Error::invalid_value(format!(
+                                "expected end of tuple array, found {}",
+                                token
+                            ))),
+                        }
+                    }
+                    token => Err(Error::invalid_value(format!(
+                        "expected array for tuple, found {}",
+                        token
+                    ))),
+                }
+            }
+        }
+    };
+}
+
+impl_stream_deserialize_tuple!(1 => (0 T0));
+impl_stream_deserialize_tuple!(2 => (0 T0 1 T1));
+impl_stream_deserialize_tuple!(3 => (0 T0 1 T1 2 T2));
+impl_stream_deserialize_tuple!(4 => (0 T0 1 T1 2 T2 3 T3));
+impl_stream_deserialize_tuple!(5 => (0 T0 1 T1 2 T2 3 T3 4 T4));
+impl_stream_deserialize_tuple!(6 => (0 T0 1 T1 2 T2 3 T3 4 T4 5 T5));
+impl_stream_deserialize_tuple!(7 => (0 T0 1 T1 2 T2 3 T3 4 T4 5 T5 6 T6));
+impl_stream_deserialize_tuple!(8 => (0 T0 1 T1 2 T2 3 T3 4 T4 5 T5 6 T6 7 T7));
+impl_stream_deserialize_tuple!(9 => (0 T0 1 T1 2 T2 3 T3 4 T4 5 T5 6 T6 7 T7 8 T8));
+impl_stream_deserialize_tuple!(10 => (0 T0 1 T1 2 T2 3 T3 4 T4 5 T5 6 T6 7 T7 8 T8 9 T9));
+impl_stream_deserialize_tuple!(11 => (0 T0 1 T1 2 T2 3 T3 4 T4 5 T5 6 T6 7 T7 8 T8 9 T9 10 T10));
+impl_stream_deserialize_tuple!(12 => (0 T0 1 T1 2 T2 3 T3 4 T4 5 T5 6 T6 7 T7 8 T8 9 T9 10 T10 11 T11));
+impl_stream_deserialize_tuple!(13 => (0 T0 1 T1 2 T2 3 T3 4 T4 5 T5 6 T6 7 T7 8 T8 9 T9 10 T10 11 T11 12 T12));
+impl_stream_deserialize_tuple!(14 => (0 T0 1 T1 2 T2 3 T3 4 T4 5 T5 6 T6 7 T7 8 T8 9 T9 10 T10 11 T11 12 T12 13 T13));
+impl_stream_deserialize_tuple!(15 => (0 T0 1 T1 2 T2 3 T3 4 T4 5 T5 6 T6 7 T7 8 T8 9 T9 10 T10 11 T11 12 T12 13 T13 14 T14));
+impl_stream_deserialize_tuple!(16 => (0 T0 1 T1 2 T2 3 T3 4 T4 5 T5 6 T6 7 T7 8 T8 9 T9 10 T10 11 T11 12 T12 13 T13 14 T14 15 T15));
+
+// Additional integer types
+impl StreamDeserialize for i128 {
+    fn deserialize_from_tokens<T: Tokenizer>(tokenizer: &mut T) -> Result<Self, Error>
+    where
+        T::Error: Into<Error>,
+    {
+        // i128 is deserialized as i64 and then converted
+        let val = i64::deserialize_from_tokens(tokenizer)?;
+        Ok(val as i128)
+    }
+}
+
+impl StreamDeserialize for u128 {
+    fn deserialize_from_tokens<T: Tokenizer>(tokenizer: &mut T) -> Result<Self, Error>
+    where
+        T::Error: Into<Error>,
+    {
+        // u128 is deserialized as u64 and then converted
+        let val = u64::deserialize_from_tokens(tokenizer)?;
+        Ok(val as u128)
+    }
+}
+
+impl StreamDeserialize for char {
+    fn deserialize_from_tokens<T: Tokenizer>(tokenizer: &mut T) -> Result<Self, Error>
+    where
+        T::Error: Into<Error>,
+    {
+        match tokenizer.next_token().map_err(|e| e.into())? {
+            Token::String(s) => {
+                let mut chars = s.chars();
+                match (chars.next(), chars.next()) {
+                    (Some(c), None) => Ok(c),
+                    _ => Err(Error::invalid_value_static("single character string")),
+                }
+            }
+            token => Err(Error::invalid_value(format!(
+                "expected string for char, found {}",
                 token
             ))),
         }
