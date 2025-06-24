@@ -14,7 +14,7 @@ use serde::{
 use crate::{Error, Map};
 
 /// Number.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum Number {
     Float(f64),
     SignedInt(i64),

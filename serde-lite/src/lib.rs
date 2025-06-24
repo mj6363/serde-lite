@@ -135,8 +135,10 @@
 
 mod deserialize;
 mod intermediate;
+mod json_tokenizer;
 mod map;
 mod serialize;
+mod streaming;
 mod update;
 
 use std::{
@@ -151,8 +153,10 @@ pub use serde_lite_derive::{Deserialize, Serialize, Update};
 pub use crate::{
     deserialize::Deserialize,
     intermediate::{Intermediate, Number},
+    json_tokenizer::JsonTokenizer,
     map::{Map, MapImpl},
     serialize::Serialize,
+    streaming::{skip_value, StreamDeserialize, StreamError, Token, Tokenizer},
     update::Update,
 };
 
