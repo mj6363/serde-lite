@@ -296,3 +296,55 @@ where
         }
     }
 }
+
+impl<T, const N: usize> StreamDeserialize for [T; N]
+where
+    T: StreamDeserialize,
+{
+    fn deserialize_from_tokens<Tok: Tokenizer>(tokenizer: &mut Tok) -> Result<Self, Error>
+    where
+        Tok::Error: Into<Error>,
+    {
+        match tokenizer.next_token().map_err(|e| e.into())? {
+            Token::ArrayStart => {
+                let mut result = Vec::with_capacity(N);
+
+                // Read exactly N elements
+                for i in 0..N {
+                    match tokenizer.peek_token().map_err(|e| e.into())? {
+                        Token::ArrayEnd => {
+                            return Err(Error::invalid_value(format!(
+                                "expected array of length {}, found array of length {}",
+                                N, i
+                            )));
+                        }
+                        _ => {
+                            result.push(T::deserialize_from_tokens(tokenizer)?);
+                        }
+                    }
+                }
+
+                // Expect ArrayEnd token
+                match tokenizer.next_token().map_err(|e| e.into())? {
+                    Token::ArrayEnd => {
+                        // Convert Vec to fixed-size array
+                        result.try_into().map_err(|_| {
+                            Error::invalid_value(format!(
+                                "failed to convert vector to array of length {}",
+                                N
+                            ))
+                        })
+                    }
+                    _ => Err(Error::invalid_value(format!(
+                        "expected array of length {}, found longer array",
+                        N
+                    ))),
+                }
+            }
+            token => Err(Error::invalid_value(format!(
+                "expected array, found {}",
+                token
+            ))),
+        }
+    }
+}

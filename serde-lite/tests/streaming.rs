@@ -63,6 +63,48 @@ fn test_stream_deserialize_array() {
 }
 
 #[test]
+fn test_stream_deserialize_fixed_array() {
+    // Test [u32; 3]
+    let json = r#"[1, 2, 3]"#;
+    let mut tokenizer = JsonTokenizer::new(Cursor::new(json));
+    let result: [u32; 3] = <[u32; 3]>::deserialize_from_tokens(&mut tokenizer).unwrap();
+    assert_eq!(result, [1, 2, 3]);
+
+    // Test [String; 2]
+    let json = r#"["hello", "world"]"#;
+    let mut tokenizer = JsonTokenizer::new(Cursor::new(json));
+    let result: [String; 2] = <[String; 2]>::deserialize_from_tokens(&mut tokenizer).unwrap();
+    assert_eq!(result, ["hello".to_string(), "world".to_string()]);
+
+    // Test empty array [i32; 0]
+    let json = r#"[]"#;
+    let mut tokenizer = JsonTokenizer::new(Cursor::new(json));
+    let result: [i32; 0] = <[i32; 0]>::deserialize_from_tokens(&mut tokenizer).unwrap();
+    assert_eq!(result, []);
+}
+
+#[test]
+fn test_stream_deserialize_fixed_array_errors() {
+    // Test array too short
+    let json = r#"[1, 2]"#;
+    let mut tokenizer = JsonTokenizer::new(Cursor::new(json));
+    let result: Result<[u32; 3], _> = <[u32; 3]>::deserialize_from_tokens(&mut tokenizer);
+    assert!(result.is_err());
+
+    // Test array too long
+    let json = r#"[1, 2, 3, 4]"#;
+    let mut tokenizer = JsonTokenizer::new(Cursor::new(json));
+    let result: Result<[u32; 3], _> = <[u32; 3]>::deserialize_from_tokens(&mut tokenizer);
+    assert!(result.is_err());
+
+    // Test not an array
+    let json = r#"42"#;
+    let mut tokenizer = JsonTokenizer::new(Cursor::new(json));
+    let result: Result<[u32; 3], _> = <[u32; 3]>::deserialize_from_tokens(&mut tokenizer);
+    assert!(result.is_err());
+}
+
+#[test]
 fn test_stream_deserialize_option() {
     // Test Some
     let json = r#"42"#;
