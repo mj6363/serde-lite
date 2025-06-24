@@ -4,104 +4,16 @@
 use std::io::Cursor;
 use std::time::Instant;
 
-use serde_lite::{Deserialize, Error, JsonTokenizer, StreamDeserialize, Token, Tokenizer};
+use serde_lite::{Deserialize, JsonTokenizer, StreamDeserialize};
+use serde_lite_derive::Deserialize;
 
-// Test data structure
-#[derive(Debug, PartialEq)]
+// Test data structure - now with derive macro that generates both implementations!
+#[derive(Debug, PartialEq, Deserialize)]
 struct Person {
     name: String,
     age: i32,
     email: String,
     active: bool,
-}
-
-// Traditional intermediate-based deserialization
-impl Deserialize for Person {
-    fn deserialize(val: &serde_lite::Intermediate) -> Result<Self, Error> {
-        let obj = val.as_map().ok_or(Error::invalid_value_static("object"))?;
-
-        Ok(Person {
-            name: obj
-                .get("name")
-                .ok_or(Error::MissingField)?
-                .as_str()
-                .ok_or(Error::invalid_value_static("string"))?
-                .to_string(),
-            age: obj
-                .get("age")
-                .ok_or(Error::MissingField)?
-                .as_number()
-                .ok_or(Error::invalid_value_static("number"))?
-                .try_into()?,
-            email: obj
-                .get("email")
-                .ok_or(Error::MissingField)?
-                .as_str()
-                .ok_or(Error::invalid_value_static("string"))?
-                .to_string(),
-            active: obj
-                .get("active")
-                .ok_or(Error::MissingField)?
-                .as_bool()
-                .ok_or(Error::invalid_value_static("bool"))?,
-        })
-    }
-}
-
-// Streaming deserialization
-impl StreamDeserialize for Person {
-    fn deserialize_from_tokens<T: Tokenizer>(tokenizer: &mut T) -> Result<Self, Error>
-    where
-        T::Error: Into<Error>,
-    {
-        // Expect object start
-        match tokenizer.next_token().map_err(|e| e.into())? {
-            Token::ObjectStart => {}
-            token => {
-                return Err(Error::invalid_value(format!(
-                    "expected object, found {}",
-                    token
-                )))
-            }
-        }
-
-        let mut name = None;
-        let mut age = None;
-        let mut email = None;
-        let mut active = None;
-
-        // Read object fields
-        loop {
-            match tokenizer.next_token().map_err(|e| e.into())? {
-                Token::ObjectEnd => break,
-                Token::String(key) => {
-                    match key.as_str() {
-                        "name" => name = Some(String::deserialize_from_tokens(tokenizer)?),
-                        "age" => age = Some(i32::deserialize_from_tokens(tokenizer)?),
-                        "email" => email = Some(String::deserialize_from_tokens(tokenizer)?),
-                        "active" => active = Some(bool::deserialize_from_tokens(tokenizer)?),
-                        _ => {
-                            // Skip unknown field
-                            serde_lite::skip_value(tokenizer)?;
-                        }
-                    }
-                }
-                token => {
-                    return Err(Error::invalid_value(format!(
-                        "expected object key, found {}",
-                        token
-                    )))
-                }
-            }
-        }
-
-        Ok(Person {
-            name: name.ok_or(Error::MissingField)?,
-            age: age.ok_or(Error::MissingField)?,
-            email: email.ok_or(Error::MissingField)?,
-            active: active.ok_or(Error::MissingField)?,
-        })
-    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
